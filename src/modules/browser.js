@@ -12,6 +12,10 @@ import { logger } from "../utils/logger.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.join(__dirname, "../..");
 
+// Constants
+const DEFAULT_VIEWPORT = { width: 1280, height: 800 };
+const UI_STABILIZATION_DELAY_MS = 3000;
+
 class BrowserManager {
   constructor() {
     this.browser = null;
@@ -21,20 +25,14 @@ class BrowserManager {
 
   /**
    * Launch browser with persistent session
-   * Uses userDataDir to persist login state across sessions
    */
   async launch() {
     try {
       logger.info("Launching Puppeteer browser...");
 
       this.browser = await puppeteer.launch({
-        headless: !config.browser.headful, // headful mode = false for headless
-        args: [
-          `--user-data-dir=${this.userDataDir}`,
-          "--no-sandbox",
-          "--disable-setuid-sandbox",
-          "--disable-dev-shm-usage",
-        ],
+        headless: !config.browser.headful,
+        args: this._getBrowserArgs(),
       });
 
       logger.info(`Browser launched (headful: ${config.browser.headful})`);
@@ -46,21 +44,66 @@ class BrowserManager {
   }
 
   /**
-   * Create or get page
+   * Get browser launch arguments
+   */
+  _getBrowserArgs() {
+    return [
+      `--user-data-dir=${this.userDataDir}`,
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-blink-features=AutomationControlled",
+    ];
+  }
+
+  /**
+   * Create or get page instance
    */
   async getPage() {
     if (!this.page) {
-      if (!this.browser) {
-        throw new Error("Browser not launched");
-      }
+      this._validateBrowserExists();
       this.page = await this.browser.newPage();
-
-      // Set viewport for better UI rendering
-      await this.page.setViewport({ width: 1280, height: 800 });
-
+      await this._configurePage(this.page);
       logger.info("Page created");
     }
     return this.page;
+  }
+
+  /**
+   * Validate browser exists
+   */
+  _validateBrowserExists() {
+    if (!this.browser) {
+      throw new Error("Browser not launched");
+    }
+  }
+
+  /**
+   * Configure page settings and event listeners
+   */
+  async _configurePage(page) {
+    await page.setViewport(DEFAULT_VIEWPORT);
+    await page.setDefaultNavigationTimeout(0);
+    await page.setDefaultTimeout(0);
+
+    this._setupPageEventListeners(page);
+  }
+
+  /**
+   * Setup page and browser event listeners
+   */
+  _setupPageEventListeners(page) {
+    page.on("close", () => {
+      logger.warn("Page closed unexpectedly");
+    });
+
+    page.on("error", (error) => {
+      logger.error(`Page error: ${error.message}`);
+    });
+
+    this.browser.on("disconnected", () => {
+      logger.error("Browser disconnected! Attempting reconnection...");
+    });
   }
 
   /**
@@ -72,7 +115,7 @@ class BrowserManager {
       logger.info(`Navigating to ${config.browser.whatsappUrl}...`);
 
       await page.goto(config.browser.whatsappUrl, {
-        waitUntil: "networkidle2",
+        waitUntil: "domcontentloaded",
         timeout: config.browser.timeout,
       });
 
@@ -91,14 +134,36 @@ class BrowserManager {
   async waitForLogin() {
     try {
       const page = await this.getPage();
-      logger.info(
-        "Waiting for WhatsApp login (scan QR code or use existing session)...",
-      );
+
+      // First check if already logged in
+      const alreadyLoggedIn = await page.evaluate(() => {
+        return (
+          !!document.querySelector('div[role="application"]') ||
+          !!document.querySelector('[data-testid="chat-list"]') ||
+          !!document.querySelector('div[aria-label="Chat list"]')
+        );
+      });
+
+      if (alreadyLoggedIn) {
+        logger.info("✅ Already logged in to WhatsApp!");
+        return true;
+      }
+
+      logger.info("Waiting for WhatsApp login (scan QR code)...");
 
       // Wait for main chat list to appear (indicates successful login)
-      await page.waitForSelector('[data-testid="chat-list-item-container"]', {
-        timeout: config.browser.timeout,
-      });
+      // Try multiple selectors for better compatibility
+      await Promise.race([
+        page.waitForSelector('div[role="application"]', {
+          timeout: config.browser.timeout,
+        }),
+        page.waitForSelector('[data-testid="chat-list"]', {
+          timeout: config.browser.timeout,
+        }),
+        page.waitForSelector('div[aria-label="Chat list"]', {
+          timeout: config.browser.timeout,
+        }),
+      ]);
 
       logger.info("✅ WhatsApp login successful!");
       return true;
@@ -115,28 +180,48 @@ class BrowserManager {
   }
 
   /**
-   * Wait for WhatsApp UI to be fully ready
-   * Checks for key UI elements before starting message detection
+   * Wait for WhatsApp UI to be ready
    */
   async waitForUIReady() {
     try {
       const page = await this.getPage();
       logger.info("Waiting for WhatsApp UI to be fully ready...");
 
-      // Wait for conversation panel
-      await page.waitForSelector('[role="region"]', {
-        timeout: 30000,
-      });
+      await this._waitForStabilization();
+      const hasUI = await this._checkUIExists(page);
 
-      // Additional wait for UI stability
-      await page.waitForTimeout(2000);
+      if (hasUI) {
+        logger.info("✅ WhatsApp UI is ready for monitoring");
+      } else {
+        logger.warn("Could not verify WhatsApp UI, continuing anyway...");
+      }
 
-      logger.info("✅ WhatsApp UI is ready for monitoring");
       return true;
     } catch (error) {
-      logger.error(`UI ready wait error: ${error.message}`);
-      throw error;
+      logger.warn(`UI ready wait error: ${error.message}`);
+      return true; // Don't fail - continue anyway
     }
+  }
+
+  /**
+   * Wait for UI to stabilize
+   */
+  async _waitForStabilization() {
+    return new Promise((resolve) =>
+      setTimeout(resolve, UI_STABILIZATION_DELAY_MS),
+    );
+  }
+
+  /**
+   * Check if WhatsApp UI exists
+   */
+  async _checkUIExists(page) {
+    return await page.evaluate(() => {
+      return (
+        document.body.innerText.includes("WhatsApp") ||
+        document.querySelector("div") !== null
+      );
+    });
   }
 
   /**

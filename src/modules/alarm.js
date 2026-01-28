@@ -1,7 +1,6 @@
 /**
  * Alarm System Module
  * Plays audio alarm and controls system volume on Windows
- * Handles looping, stopping, and volume forcing
  */
 
 import { spawn } from "child_process";
@@ -15,20 +14,25 @@ import { setWindowsVolume } from "../utils/volumeControl.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.join(__dirname, "../..");
 
+// Constants
+const POWERSHELL_SLEEP_DURATION_SEC = 19;
+const LOOP_INTERVAL_MS = POWERSHELL_SLEEP_DURATION_SEC * 1000 + 500; // Add 500ms buffer
+
 class AlarmSystem {
   constructor() {
     this.isPlaying = false;
+    this.isCurrentlyPlaying = false; // Track if audio is actively playing
     this.audioProcess = null;
     this.loopInterval = null;
     this.soundFilePath = path.join(projectRoot, config.alarm.soundFile);
   }
 
   /**
-   * Initialize alarm system and validate audio file
+   * Initialize alarm system
    */
   async initialize() {
     try {
-      if (!fs.existsSync(this.soundFilePath)) {
+      if (!this._validateSoundFileExists()) {
         logger.warn(
           `Alarm audio file not found: ${this.soundFilePath}\n` +
             `Please add an audio file (MP3/WAV) to assets/alarm.mp3`,
@@ -45,8 +49,14 @@ class AlarmSystem {
   }
 
   /**
+   * Validate sound file exists
+   */
+  _validateSoundFileExists() {
+    return fs.existsSync(this.soundFilePath);
+  }
+
+  /**
    * Start playing alarm
-   * Handles volume control and looping
    */
   async start() {
     if (this.isPlaying) {
@@ -55,33 +65,13 @@ class AlarmSystem {
     }
 
     try {
-      // Force system volume to 100%
-      if (config.alarm.forceVolume) {
-        const volumeSet = await setWindowsVolume(config.alarm.targetVolume);
-        if (!volumeSet && !config.alarm.fallbackOnVolumeFailure) {
-          logger.error("Failed to set volume and fallback disabled");
-          return;
-        }
-        if (volumeSet) {
-          logger.debug(`System volume forced to ${config.alarm.targetVolume}%`);
-        }
-      }
+      await this._setSystemVolume();
 
       this.isPlaying = true;
       logger.info("🔔 ALARM TRIGGERED - Playing audio loop");
 
-      // Start initial playback
-      await this.playOnce();
-
-      // Setup looping if enabled
-      if (config.alarm.loop) {
-        this.setupLoop();
-      }
-
-      // Setup auto-stop if duration is set
-      if (config.alarm.autoStopMs > 0) {
-        setTimeout(() => this.stop(), config.alarm.autoStopMs);
-      }
+      this._setupLoopIfEnabled();
+      this._setupAutoStopIfConfigured();
     } catch (error) {
       logger.error(`Alarm start error: ${error.message}`);
       this.isPlaying = false;
@@ -89,32 +79,86 @@ class AlarmSystem {
   }
 
   /**
+   * Set system volume if configured
+   */
+  async _setSystemVolume() {
+    if (!config.alarm.forceVolume) return;
+
+    const volumeSet = await setWindowsVolume(config.alarm.targetVolume);
+
+    if (!volumeSet && !config.alarm.fallbackOnVolumeFailure) {
+      throw new Error("Failed to set volume and fallback disabled");
+    }
+
+    if (volumeSet) {
+      logger.debug(`System volume set to ${config.alarm.targetVolume}%`);
+    }
+  }
+
+  /**
+   * Play initial sound
+   */
+  async _playInitialSound() {
+    await this._playOnce();
+  }
+
+  /**
+   * Setup loop if enabled in config
+   */
+  _setupLoopIfEnabled() {
+    if (config.alarm.loop) {
+      this._setupLoop();
+    }
+  }
+
+  /**
+   * Setup auto-stop if configured
+   */
+  _setupAutoStopIfConfigured() {
+    if (config.alarm.autoStopMs > 0) {
+      setTimeout(() => this.stop(), config.alarm.autoStopMs);
+    }
+  }
+
+  /**
    * Play audio file once
    */
-  playOnce() {
+  _playOnce() {
     return new Promise((resolve) => {
       try {
+        // Prevent overlapping playback
+        if (this.isCurrentlyPlaying) {
+          logger.debug("Audio already playing, skipping...");
+          resolve();
+          return;
+        }
+
         if (!fs.existsSync(this.soundFilePath)) {
           logger.error(`Audio file not found: ${this.soundFilePath}`);
           resolve();
           return;
         }
 
-        // Use Windows built-in audio player (wmplayer, powershell media, or ffmpeg)
-        const audioProcess = this.playWithPowerShell();
+        this.isCurrentlyPlaying = true;
+
+        // Use PowerShell to play audio
+        const audioProcess = this._playWithPowerShell();
 
         audioProcess.on("exit", () => {
+          this.isCurrentlyPlaying = false;
           resolve();
         });
 
         audioProcess.on("error", (error) => {
           logger.warn(`Audio playback error: ${error.message}`);
+          this.isCurrentlyPlaying = false;
           resolve();
         });
 
         this.audioProcess = audioProcess;
       } catch (error) {
         logger.error(`Play once error: ${error.message}`);
+        this.isCurrentlyPlaying = false;
         resolve();
       }
     });
@@ -122,20 +166,9 @@ class AlarmSystem {
 
   /**
    * Play audio using PowerShell (built-in on Windows)
-   * More reliable than external players
    */
-  playWithPowerShell() {
-    const script = `
-      [Windows.Media.MediaManager, Windows.Media.MediaManager, ContentType=WindowsRuntime] > $null;
-      [Windows.Foundation.Collections.PropertySet]::new().Add('System.Media.MediaProperties.MediaCategory', 'BackgroundCapableMedia') > $null;
-      
-      $player = [Windows.Media.Playback.MediaPlayer]::new();
-      $file = [Windows.Storage.StorageFile]::GetFileFromPathAsync('${this.soundFilePath}') | Wait-Process -PassThru;
-      $player.Source = [Windows.Media.Core.MediaSource]::CreateFromStorageFile($file);
-      $player.Play();
-      
-      Start-Sleep -Seconds 999;
-    `;
+  _playWithPowerShell() {
+    const script = `Add-Type -AssemblyName presentationCore; $mediaPlayer = New-Object system.windows.media.mediaplayer; $mediaPlayer.open('${this.soundFilePath.replace(/\\/g, "\\\\")}'); $mediaPlayer.Play(); Start-Sleep -Seconds ${POWERSHELL_SLEEP_DURATION_SEC}`;
 
     return spawn("powershell.exe", ["-NoProfile", "-Command", script], {
       stdio: "ignore",
@@ -145,31 +178,20 @@ class AlarmSystem {
   }
 
   /**
-   * Play audio using Windows Media Player command line
-   * Fallback method
-   */
-  playWithWMPlayer() {
-    return spawn("wmplayer.exe", [this.soundFilePath], {
-      stdio: "ignore",
-      windowsHide: true,
-      detached: false,
-    });
-  }
-
-  /**
    * Setup loop interval for continuous playback
    */
-  setupLoop() {
-    // Estimate audio duration (fallback to 5 seconds)
-    const estimatedDuration = 5000; // 5 seconds
+  _setupLoop() {
+    // Play immediately first
+    this._playOnce();
 
+    // Then setup interval for subsequent plays
     this.loopInterval = setInterval(async () => {
       if (this.isPlaying) {
-        await this.playOnce();
+        await this._playOnce();
       }
-    }, estimatedDuration);
+    }, LOOP_INTERVAL_MS);
 
-    logger.debug("Alarm loop started");
+    logger.debug(`Alarm loop started (interval: ${LOOP_INTERVAL_MS}ms)`);
   }
 
   /**
@@ -183,6 +205,19 @@ class AlarmSystem {
       }
 
       this.isPlaying = false;
+      this.isCurrentlyPlaying = false; // Reset playback state
+
+      // Clear loop interval first
+      if (this.loopInterval) {
+        clearInterval(this.loopInterval);
+        this.loopInterval = null;
+      }
+
+      // Aggressively kill all PowerShell processes (force immediate stop)
+      spawn("taskkill", ["/F", "/IM", "powershell.exe"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
 
       // Kill audio process
       if (this.audioProcess) {
@@ -192,12 +227,6 @@ class AlarmSystem {
           // Process may already be dead
         }
         this.audioProcess = null;
-      }
-
-      // Clear loop interval
-      if (this.loopInterval) {
-        clearInterval(this.loopInterval);
-        this.loopInterval = null;
       }
 
       // Kill all wmplayer instances (PowerShell audio fallback)

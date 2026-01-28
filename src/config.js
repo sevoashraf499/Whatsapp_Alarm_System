@@ -8,7 +8,7 @@ export const config = {
   browser: {
     headful: true, // Run in headful mode (with visible window)
     userDataDir: "./user_data", // Persist login state (QR scan only once)
-    timeout: 60000, // 60 seconds for page load
+    timeout: 120000, // 120 seconds for page load
     whatsappUrl: "https://web.whatsapp.com",
   },
 
@@ -33,7 +33,7 @@ export const config = {
 
     // Chat filtering
     chatFilter: {
-      enabled: true,
+      enabled: false, // DISABLED - Monitor all chats
       // Mode: 'active' (only current chat) or 'whitelist' (specific chats)
       mode: "whitelist", // 'active' or 'whitelist'
       // Only used if mode is 'whitelist'
@@ -80,7 +80,7 @@ export const config = {
   // Logging Settings
   logging: {
     enabled: true,
-    level: "INFO", // 'DEBUG', 'INFO', 'WARN', 'ERROR'
+    level: "DEBUG", // 'DEBUG', 'INFO', 'WARN', 'ERROR'
     timestamps: true,
     includeStackTrace: false, // Show stack traces on errors
   },

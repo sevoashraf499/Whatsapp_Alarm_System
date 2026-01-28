@@ -15,6 +15,11 @@ import { alarm } from "./modules/alarm.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.join(__dirname, "..");
 
+// Constants
+const KEEPALIVE_INTERVAL_MS = 60000; // 1 minute
+const EXIT_SUCCESS = 0;
+const EXIT_FAILURE = 1;
+
 class WhatsAppAlarmSystem {
   constructor() {
     this.browser = null;
@@ -29,67 +34,105 @@ class WhatsAppAlarmSystem {
    */
   async start() {
     try {
-      logger.info("========================================");
-      logger.info("WhatsApp Alarm System Starting...");
-      logger.info("========================================");
+      this._printStartupBanner();
 
-      // Initialize alarm system
-      const alarmReady = await alarm.initialize();
-      if (!alarmReady) {
-        logger.warn(
-          "Alarm system initialization incomplete, but continuing...",
-        );
-      }
+      await this._initializeAlarm();
+      await this._initializeBrowser();
+      await this._initializeWatcher();
+      await this._startMonitoring();
 
-      // Launch browser
-      await browserManager.launch();
-      this.browser = browserManager.browser;
-      this.page = await browserManager.getPage();
-
-      // Navigate to WhatsApp
-      await browserManager.navigateToWhatsApp();
-
-      // Wait for login (QR code scan or existing session)
-      await browserManager.waitForLogin();
-
-      // Wait for UI to be ready
-      await browserManager.waitForUIReady();
-
-      // Initialize message watcher
-      this.watcher = new MessageWatcher(this.page, (messageData) =>
-        this.onKeywordDetected(messageData),
-      );
-
-      const watcherReady = await this.watcher.initialize();
-      if (!watcherReady) {
-        logger.error("Watcher initialization failed");
-        await this.shutdown();
-        return;
-      }
-
-      // Start polling for messages
-      this.pollInterval = await this.watcher.startPolling();
-
-      this.isRunning = true;
-
-      logger.info("========================================");
-      logger.info("✅ System Ready - Monitoring Messages");
-      logger.info("========================================");
-      logger.info(`Keywords: ${config.detection.keywords.join(", ")}`);
-      logger.info(`Alarm sound: ${config.alarm.soundFile}`);
-      logger.info(`Stop alarm with: ${config.alarm.stopKeybind}`);
-      logger.info("========================================");
-
-      // Setup keyboard listener for stopping alarm
-      this.setupKeyboardListener();
-
-      // Setup graceful shutdown
-      this.setupShutdownHandlers();
+      this._printReadyMessage();
+      this._setupEventHandlers();
     } catch (error) {
       logger.error(`System start error: ${error.message}`);
       await this.shutdown();
-      process.exit(1);
+      process.exit(EXIT_FAILURE);
     }
+  }
+
+  /**
+   * Print startup banner
+   */
+  _printStartupBanner() {
+    logger.info("========================");
+    logger.info("Sa7eny🏃‍♂️‍➡️ Starting...");
+    logger.info("========================");
+  }
+
+  /**
+   * Initialize alarm system
+   */
+  async _initializeAlarm() {
+    const alarmReady = await alarm.initialize();
+    if (!alarmReady) {
+      logger.warn("Alarm system initialization incomplete, but continuing...");
+    }
+  }
+
+  /**
+   * Initialize browser and navigate to WhatsApp
+   */
+  async _initializeBrowser() {
+    logger.debug("Launching browser...");
+    await browserManager.launch();
+    this.browser = browserManager.browser;
+    this.page = await browserManager.getPage();
+
+    logger.debug("Navigating to WhatsApp...");
+    await browserManager.navigateToWhatsApp();
+
+    logger.debug("Waiting for UI ready...");
+    await browserManager.waitForUIReady();
+  }
+
+  /**
+   * Initialize message watcher
+   */
+  async _initializeWatcher() {
+    logger.debug("Initializing message watcher...");
+    this.watcher = new MessageWatcher(this.page, (messageData) =>
+      this.onKeywordDetected(messageData),
+    );
+
+    const watcherReady = await this.watcher.initialize();
+    if (!watcherReady) {
+      throw new Error("Watcher initialization failed");
+    }
+  }
+
+  /**
+   * Start monitoring for messages
+   */
+  async _startMonitoring() {
+    logger.debug("Starting message polling...");
+    this.pollInterval = await this.watcher.startPolling();
+    this.isRunning = true;
+
+    // Add keepalive to prevent process from exiting
+    setInterval(() => {
+      logger.debug("System keepalive tick");
+    }, KEEPALIVE_INTERVAL_MS);
+  }
+
+  /**
+   * Print ready message with configuration
+   */
+  _printReadyMessage() {
+    logger.info("========================================");
+    logger.info("✅ System Ready - Monitoring Messages");
+    logger.info("========================================");
+    logger.info(`Keywords: ${config.detection.keywords.join(", ")}`);
+    logger.info(`Alarm sound: ${config.alarm.soundFile}`);
+    logger.info(`Stop alarm with: ${config.alarm.stopKeybind}`);
+    logger.info("========================================");
+  }
+
+  /**
+   * Setup event handlers
+   */
+  _setupEventHandlers() {
+    this.setupKeyboardListener();
+    this.setupShutdownHandlers();
   }
 
   /**
@@ -98,22 +141,26 @@ class WhatsAppAlarmSystem {
    */
   async onKeywordDetected(messageData) {
     try {
+      logger.debug("onKeywordDetected callback triggered!");
       const { keyword, text, chatName, timestamp } = messageData;
 
       logger.info("");
       logger.info("╔════════════════════════════════════════╗");
-      logger.info("║       🚨 ALARM TRIGGERED 🚨            ║");
+      logger.info("║       🚨 ALARM TRIGGERED 🚨           ║");
       logger.info("╚════════════════════════════════════════╝");
       logger.info(`Keyword: ${keyword}`);
-      logger.info(`Chat: ${chatName}`);
+      logger.info(`Chat: ${chatName || "Unknown"}`);
       logger.info(`Message: ${text.substring(0, 80)}`);
       logger.info(`Time: ${timestamp}`);
       logger.info("");
 
       // Start alarm
+      logger.debug("Calling alarm.start()...");
       await alarm.start();
+      logger.debug("alarm.start() completed");
     } catch (error) {
       logger.error(`Keyword detection handler error: ${error.message}`);
+      logger.error(error.stack);
     }
   }
 
@@ -164,8 +211,8 @@ class WhatsAppAlarmSystem {
     try {
       if (!this.isRunning) return;
 
-      logger.info("");
-      logger.info("Shutting down WhatsApp Alarm System...");
+      logger.info("_________________________");
+      logger.info("Shutting down Sa7eny🏃‍♂️‍➡️...");
 
       this.isRunning = false;
 

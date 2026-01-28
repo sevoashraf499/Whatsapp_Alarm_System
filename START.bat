@@ -2,14 +2,17 @@
 REM WhatsApp Alarm System - Quick Start Launcher
 REM This batch file provides easy access to common commands
 
+REM Set UTF-8 encoding for proper character display
+chcp 65001 >nul 2>&1
+
 setlocal enabledelayedexpansion
 
 :menu
 cls
 echo.
 echo ╔════════════════════════════════════════════════════════════╗
-echo ║     WhatsApp Alarm System - Windows 11 Edition            ║
-echo ║        Arabic Keyword Detection with Alarm                ║
+echo ║     WhatsApp Alarm System - Windows 11 Edition             ║
+echo ║        Arabic Keyword Detection with Alarm                 ║
 echo ╚════════════════════════════════════════════════════════════╝
 echo.
 echo 1. Start System (npm start)
