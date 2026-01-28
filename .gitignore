@@ -1,0 +1,17 @@
+node_modules/
+user_data/
+Notes/
+*.log
+*.mp4
+*.avi
+.DS_Store
+.vscode/
+debug.png
+screenshot.png
+*.lock
+.env
+.env.local
+dist/
+build/
+*.tmp
+*~

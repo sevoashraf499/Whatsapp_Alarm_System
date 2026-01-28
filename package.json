@@ -1,0 +1,28 @@
+{
+  "name": "whatsapp-alarm-system",
+  "version": "1.0.0",
+  "description": "Windows 11 WhatsApp Desktop Automation with Keyword Detection Alarm",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "clean": "rmdir /s /q user_data 2>nul || echo No user_data folder to clean"
+  },
+  "keywords": [
+    "whatsapp",
+    "automation",
+    "puppeteer",
+    "alarm",
+    "windows"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "puppeteer": "^23.0.0"
+  },
+  "devDependencies": {},
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
