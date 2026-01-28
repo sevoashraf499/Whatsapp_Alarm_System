@@ -146,7 +146,7 @@ class WhatsAppAlarmSystem {
 
       logger.info("");
       logger.info("╔════════════════════════════════════════╗");
-      logger.info("║       🚨 ALARM TRIGGERED 🚨           ║");
+      logger.info("║       🚨 ALARM TRIGGERED 🚨            ║");
       logger.info("╚════════════════════════════════════════╝");
       logger.info(`Keyword: ${keyword}`);
       logger.info(`Chat: ${chatName || "Unknown"}`);

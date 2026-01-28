@@ -1,10 +1,10 @@
 @echo off
-REM WhatsApp Alarm System - Windows Setup Batch Script
+REMSa7eny🏃‍♂️‍➡️ - Windows Setup Batch Script
 REM Usage: setup.bat
 
 setlocal enabledelayedexpansion
 
-echo WhatsApp Alarm System - Windows Setup
+echoSa7eny🏃‍♂️‍➡️ - Windows Setup
 echo ======================================
 echo.
 

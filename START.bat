@@ -1,5 +1,5 @@
 @echo off
-REM WhatsApp Alarm System - Quick Start Launcher
+REMSa7eny🏃‍♂️‍➡️ - Quick Start Launcher
 REM This batch file provides easy access to common commands
 
 REM Set UTF-8 encoding for proper character display
@@ -11,8 +11,8 @@ setlocal enabledelayedexpansion
 cls
 echo.
 echo ╔════════════════════════════════════════════════════════════╗
-echo ║     WhatsApp Alarm System - Windows 11 Edition             ║
-echo ║        Arabic Keyword Detection with Alarm                 ║
+echo ║    Sa7eny🏃‍♂️‍➡️ - Windows 11 Edition                           ║
+echo ║        Arabic Keyword Detection with Alarm                  
 echo ╚════════════════════════════════════════════════════════════╝
 echo.
 echo 1. Start System (npm start)
@@ -38,7 +38,7 @@ goto menu
 
 :start
 cls
-echo Starting WhatsApp Alarm System...
+echo Starting Sa7eny🏃‍♂️‍➡️...
 echo.
 npm start
 pause
