@@ -5,7 +5,7 @@ A Windows 11 desktop automation system that monitors WhatsApp Web for specific A
 ## 📋 Project Structure
 
 ```
-whatsapp-alarm-system/
+Sa7eny/
 ├── src/
 │   ├── index.js                 # Main entry point & orchestrator
 │   ├── config.js                # Centralized configuration

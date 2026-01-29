@@ -1,6 +1,5 @@
 @echo off
 REMSa7eny🏃‍♂️‍➡️ - Quick Start Launcher
-REM This batch file provides easy access to common commands
 
 REM Set UTF-8 encoding for proper character display
 chcp 65001 >nul 2>&1
@@ -11,29 +10,20 @@ setlocal enabledelayedexpansion
 cls
 echo.
 echo ╔════════════════════════════════════════════════════════════╗
-echo ║    Sa7eny🏃‍♂️‍➡️ - Windows 11 Edition                           ║
-echo ║        Arabic Keyword Detection with Alarm                  
+echo ║    Sa7eny🏃‍♂️‍➡️ - WhatsApp Alarm System                        ║
 echo ╚════════════════════════════════════════════════════════════╝
 echo.
-echo 1. Start System (npm start)
-echo 2. Install Dependencies (npm install)
-echo 3. Open README Documentation
-echo 4. Open Quick Start Guide
-echo 5. Clean Session (remove login)
-echo 6. View Configuration
-echo 7. View Source Code
-echo 8. Exit
+echo 1. Start System
+echo 2. Install Dependencies
+echo 3. Clean Session (remove login)
+echo 4. Exit
 echo.
-set /p choice="Enter your choice (1-8): "
+set /p choice="Enter your choice (1-4): "
 
 if "%choice%"=="1" goto start
 if "%choice%"=="2" goto install
-if "%choice%"=="3" goto readme
-if "%choice%"=="4" goto quickstart
-if "%choice%"=="5" goto clean
-if "%choice%"=="6" goto config
-if "%choice%"=="7" goto source
-if "%choice%"=="8" goto end
+if "%choice%"=="3" goto clean
+if "%choice%"=="4" goto end
 goto menu
 
 :start
@@ -53,14 +43,6 @@ echo.
 pause
 goto menu
 
-:readme
-start notepad README.md
-goto menu
-
-:quickstart
-start notepad QUICKSTART.md
-goto menu
-
 :clean
 cls
 echo Removing saved login session...
@@ -72,18 +54,6 @@ if exist user_data (
 )
 echo.
 pause
-goto menu
-
-:config
-cls
-echo Opening configuration file...
-start notepad src\config.js
-goto menu
-
-:source
-cls
-echo Opening source code folder...
-start explorer src
 goto menu
 
 :end

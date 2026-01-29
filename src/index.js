@@ -177,6 +177,9 @@ class WhatsAppAlarmSystem {
         // ESC key pressed
         logger.info("Stop signal received (ESC)");
         alarm.stop();
+        logger.info(
+          "✅ Alarm stopped - System still monitoring, Go back to bed😁",
+        );
       }
       if (char === "\u0003" || char === "q") {
         // CTRL+C or Q pressed

@@ -13,7 +13,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.join(__dirname, "../..");
 
 // Constants
-const DEFAULT_VIEWPORT = { width: 1280, height: 800 };
 const UI_STABILIZATION_DELAY_MS = 3000;
 
 class BrowserManager {
@@ -33,6 +32,7 @@ class BrowserManager {
       this.browser = await puppeteer.launch({
         headless: !config.browser.headful,
         args: this._getBrowserArgs(),
+        defaultViewport: null, // Disable default viewport to allow full screen
       });
 
       logger.info(`Browser launched (headful: ${config.browser.headful})`);
@@ -53,6 +53,7 @@ class BrowserManager {
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
       "--disable-blink-features=AutomationControlled",
+      "--start-maximized", // Full screen window
     ];
   }
 
@@ -82,7 +83,6 @@ class BrowserManager {
    * Configure page settings and event listeners
    */
   async _configurePage(page) {
-    await page.setViewport(DEFAULT_VIEWPORT);
     await page.setDefaultNavigationTimeout(0);
     await page.setDefaultTimeout(0);
 
