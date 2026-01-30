@@ -9,7 +9,10 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { config } from "../config.js";
 import { logger } from "../utils/logger.js";
-import { setWindowsVolume } from "../utils/volumeControl.js";
+import {
+  executePowerShellScript,
+  escapePowerShellPath,
+} from "../utils/powershellHelper.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.join(__dirname, "../..");
@@ -17,6 +20,7 @@ const projectRoot = path.join(__dirname, "../..");
 // Constants
 const POWERSHELL_SLEEP_DURATION_SEC = 19;
 const LOOP_INTERVAL_MS = POWERSHELL_SLEEP_DURATION_SEC * 1000 + 500; // Add 500ms buffer
+const POWERSHELL_ASSEMBLY = "presentationCore";
 
 class AlarmSystem {
   constructor() {
@@ -65,8 +69,6 @@ class AlarmSystem {
     }
 
     try {
-      await this._setSystemVolume();
-
       this.isPlaying = true;
       logger.info("🔔 ALARM TRIGGERED - Playing audio loop");
 
@@ -75,23 +77,6 @@ class AlarmSystem {
     } catch (error) {
       logger.error(`Alarm start error: ${error.message}`);
       this.isPlaying = false;
-    }
-  }
-
-  /**
-   * Set system volume if configured
-   */
-  async _setSystemVolume() {
-    if (!config.alarm.forceVolume) return;
-
-    const volumeSet = await setWindowsVolume(config.alarm.targetVolume);
-
-    if (!volumeSet && !config.alarm.fallbackOnVolumeFailure) {
-      throw new Error("Failed to set volume and fallback disabled");
-    }
-
-    if (volumeSet) {
-      logger.debug(`System volume set to ${config.alarm.targetVolume}%`);
     }
   }
 
@@ -168,13 +153,20 @@ class AlarmSystem {
    * Play audio using PowerShell (built-in on Windows)
    */
   _playWithPowerShell() {
-    const script = `Add-Type -AssemblyName presentationCore; $mediaPlayer = New-Object system.windows.media.mediaplayer; $mediaPlayer.open('${this.soundFilePath.replace(/\\/g, "\\\\")}'); $mediaPlayer.Play(); Start-Sleep -Seconds ${POWERSHELL_SLEEP_DURATION_SEC}`;
-
-    return spawn("powershell.exe", ["-NoProfile", "-Command", script], {
+    const script = this._buildPowerShellScript();
+    return executePowerShellScript(script, {
       stdio: "ignore",
       windowsHide: true,
       detached: false,
     });
+  }
+
+  /**
+   * Build PowerShell script for audio playback
+   */
+  _buildPowerShellScript() {
+    const escapedPath = escapePowerShellPath(this.soundFilePath);
+    return `Add-Type -AssemblyName ${POWERSHELL_ASSEMBLY}; $mediaPlayer = New-Object system.windows.media.mediaplayer; $mediaPlayer.open('${escapedPath}'); $mediaPlayer.Play(); Start-Sleep -Seconds ${POWERSHELL_SLEEP_DURATION_SEC}`;
   }
 
   /**

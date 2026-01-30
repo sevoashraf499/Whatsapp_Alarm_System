@@ -8,6 +8,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { config } from "../config.js";
 import { logger } from "../utils/logger.js";
+import { LOGIN_SELECTORS } from "../utils/whatsappSelectors.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.join(__dirname, "../..");
@@ -136,13 +137,7 @@ class BrowserManager {
       const page = await this.getPage();
 
       // First check if already logged in
-      const alreadyLoggedIn = await page.evaluate(() => {
-        return (
-          !!document.querySelector('div[role="application"]') ||
-          !!document.querySelector('[data-testid="chat-list"]') ||
-          !!document.querySelector('div[aria-label="Chat list"]')
-        );
-      });
+      const alreadyLoggedIn = await this._checkLoginState(page);
 
       if (alreadyLoggedIn) {
         logger.info("✅ Already logged in to WhatsApp!");
@@ -152,18 +147,7 @@ class BrowserManager {
       logger.info("Waiting for WhatsApp login (scan QR code)...");
 
       // Wait for main chat list to appear (indicates successful login)
-      // Try multiple selectors for better compatibility
-      await Promise.race([
-        page.waitForSelector('div[role="application"]', {
-          timeout: config.browser.timeout,
-        }),
-        page.waitForSelector('[data-testid="chat-list"]', {
-          timeout: config.browser.timeout,
-        }),
-        page.waitForSelector('div[aria-label="Chat list"]', {
-          timeout: config.browser.timeout,
-        }),
-      ]);
+      await this._waitForLoginSelectors(page);
 
       logger.info("✅ WhatsApp login successful!");
       return true;
@@ -222,6 +206,25 @@ class BrowserManager {
         document.querySelector("div") !== null
       );
     });
+  }
+
+  /**
+   * Check if user is already logged in
+   */
+  async _checkLoginState(page) {
+    return await page.evaluate((selectors) => {
+      return selectors.some((selector) => !!document.querySelector(selector));
+    }, LOGIN_SELECTORS);
+  }
+
+  /**
+   * Wait for any login selector to appear
+   */
+  async _waitForLoginSelectors(page) {
+    const promises = LOGIN_SELECTORS.map((selector) =>
+      page.waitForSelector(selector, { timeout: config.browser.timeout }),
+    );
+    await Promise.race(promises);
   }
 
   /**

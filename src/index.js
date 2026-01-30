@@ -13,11 +13,9 @@ import { MessageWatcher } from "./modules/watcher.js";
 import { alarm } from "./modules/alarm.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const projectRoot = path.join(__dirname, "..");
 
 // Constants
 const KEEPALIVE_INTERVAL_MS = 60000; // 1 minute
-const EXIT_SUCCESS = 0;
 const EXIT_FAILURE = 1;
 
 class WhatsAppAlarmSystem {
@@ -177,6 +175,9 @@ class WhatsAppAlarmSystem {
         // ESC key pressed
         logger.info("Stop signal received (ESC)");
         alarm.stop();
+        if (this.watcher) {
+          this.watcher.resetAfterAlarmStop();
+        }
         logger.info(
           "✅ Alarm stopped - System still monitoring, Go back to bed😁",
         );

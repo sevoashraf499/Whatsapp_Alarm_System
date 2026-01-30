@@ -7,10 +7,15 @@
 import { config } from "../config.js";
 import { logger } from "../utils/logger.js";
 import { matchKeywords, hashText } from "../utils/textMatcher.js";
+import {
+  CHAT_HEADER_SELECTORS,
+  MESSAGE_META_SELECTORS,
+  MESSAGE_CONTAINER_SELECTORS,
+} from "../utils/whatsappSelectors.js";
 
 // Constants
-const GRACE_PERIOD_MS = 2000;
 const MIN_MESSAGE_LENGTH = 2;
+const MAX_HASH_CACHE_SIZE = 1000;
 
 class MessageWatcher {
   constructor(page, onMessageDetected) {
@@ -56,19 +61,10 @@ class MessageWatcher {
   }
 
   /**
-   * Prepare for monitoring by marking existing messages
+   * Prepare for monitoring
    */
   async _prepareForMonitoring() {
-    await this._markExistingMessagesAsProcessed();
-    await this._waitGracePeriod();
-    logger.info("Grace period complete - starting to monitor for NEW messages");
-  }
-
-  /**
-   * Wait for grace period to ensure all existing messages are marked
-   */
-  async _waitGracePeriod() {
-    return new Promise((resolve) => setTimeout(resolve, GRACE_PERIOD_MS));
+    logger.info("Monitoring for new messages");
   }
 
   /**
@@ -79,76 +75,237 @@ class MessageWatcher {
   }
 
   /**
-   * Mark all currently visible messages as processed
-   * Prevents triggering on old messages when system starts
-   */
-  async _markExistingMessagesAsProcessed() {
-    try {
-      const count = await this.page.evaluate(() => {
-        const selectors = [
-          'div[class*="message-"]',
-          'span[dir="ltr"]',
-          'span[dir="rtl"]',
-          'span[dir="auto"]',
-        ];
-
-        const allMessages = document.querySelectorAll(selectors.join(", "));
-        allMessages.forEach((el) => {
-          el.__processed = true;
-        });
-
-        return allMessages.length;
-      });
-
-      logger.info(`Marked ${count} existing messages as processed`);
-    } catch (error) {
-      logger.warn(`Error marking existing messages: ${error.message}`);
-    }
-  }
-
-  /**
    * Inject MutationObserver into browser context
    * Observer detects and queues new message nodes
    */
   async _injectObserver() {
-    await this.page.evaluate(() => {
-      window.__messageQueue = [];
-      console.log("[WATCHER] Initializing observer...");
+    const minLength = MIN_MESSAGE_LENGTH;
+    const messageMetaSelectors = MESSAGE_META_SELECTORS;
+    const containerSelectors = MESSAGE_CONTAINER_SELECTORS;
 
-      const observer = new MutationObserver((mutations) => {
-        mutations.forEach((mutation) => {
-          if (mutation.type === "childList" && mutation.addedNodes.length > 0) {
-            mutation.addedNodes.forEach((node) => {
-              if (node.nodeType === Node.ELEMENT_NODE) {
-                const text = node.textContent?.trim() || "";
+    await this.page.evaluate(
+      (minLength, metaSelectors, containerSels) => {
+        window.__messageQueue = [];
+        window.__seenMessageKeys = window.__seenMessageKeys || new Set();
+        const timeOnlyPattern = /\d{1,2}:\d{2}\s*(?:AM|PM)?/i;
+        const relativeTimePatterns =
+          /yesterday|Y[eE][sS][tT][eE][rR][dD][aA][yY]|أمس/i;
 
-                if (text.length > 2) {
-                  const isOutgoing =
-                    node
-                      .closest('[data-testid*="msg-container"]')
-                      ?.classList.contains("message-out") ||
-                    node.closest(".message-out") !== null;
+        // Utility functions in browser context
+        const isOutgoing = (element) => {
+          return (
+            element?.classList?.contains("message-out") ||
+            element?.closest?.(".message-out") !== null
+          );
+        };
 
-                  if (!isOutgoing) {
-                    window.__messageQueue.push({
-                      text: text,
-                      timestamp: Date.now(),
-                    });
-                    console.log("[WATCHER] Queued:", text.substring(0, 30));
-                  }
-                }
-              }
-            });
+        const findMessageContainer = (node) => {
+          if (!node || node.nodeType !== Node.ELEMENT_NODE) return null;
+
+          const directId = node.getAttribute?.("data-id");
+          if (directId) return node;
+
+          const closestId = node.closest?.("[data-id]");
+          if (closestId) return closestId;
+
+          for (const selector of containerSels) {
+            const found = node.closest(selector);
+            if (found) return found;
           }
-        });
-      });
 
-      observer.observe(document.body, {
-        childList: true,
-        subtree: true,
-      });
-      console.log("[WATCHER] Observer active");
-    });
+          // Fallback: walk up a few levels and pick a parent that contains a known timestamp node
+          let current = node;
+          for (let depth = 0; current && depth < 12; depth++) {
+            for (const selector of metaSelectors) {
+              if (current.querySelector?.(selector)) {
+                return current;
+              }
+            }
+            current = current.parentElement;
+          }
+
+          return null;
+        };
+
+        const parseTimeOnly = (text) => {
+          const match = text.match(timeOnlyPattern);
+          if (!match) return null;
+
+          const timeStr = match[0].trim();
+          const now = new Date();
+          const [time, period] = timeStr.split(/\s+/);
+          const [hours, minutes] = time.split(":").map(Number);
+
+          let hour24 = hours;
+          if (period && period.toUpperCase() === "PM" && hours !== 12) {
+            hour24 = hours + 12;
+          } else if (period && period.toUpperCase() === "AM" && hours === 12) {
+            hour24 = 0;
+          }
+
+          const todayWithTime = new Date(
+            now.getFullYear(),
+            now.getMonth(),
+            now.getDate(),
+            hour24,
+            minutes,
+          );
+
+          return todayWithTime.getTime();
+        };
+
+        const extractMessageKey = (node, container, timeText, text) => {
+          if (container) {
+            const dataId = container.getAttribute("data-id");
+            if (dataId) return `id:${dataId}`;
+          }
+
+          const closestWithId = node.closest("[data-id]");
+          const closestId = closestWithId?.getAttribute("data-id");
+          if (closestId) return `id:${closestId}`;
+
+          if (timeText) return `meta:${timeText}|text:${text}`;
+
+          const timeFallback = parseTimeOnly(text);
+          if (timeFallback) return `time:${timeFallback}|text:${text}`;
+
+          return `text:${text.trim().slice(0, 100)}`;
+        };
+
+        const extractTimestamp = (nodeOrContainer) => {
+          const messageContainer =
+            findMessageContainer(nodeOrContainer) || nodeOrContainer;
+
+          if (
+            !messageContainer ||
+            messageContainer.nodeType !== Node.ELEMENT_NODE
+          ) {
+            const text = nodeOrContainer?.textContent || "";
+            const parsedTime = parseTimeOnly(text);
+            if (parsedTime) return parsedTime;
+            return null;
+          }
+
+          // Try to find timestamp element
+          let timeElement = null;
+          for (const selector of metaSelectors) {
+            timeElement = messageContainer.querySelector(selector);
+            if (timeElement) {
+              break;
+            }
+          }
+
+          if (!timeElement) {
+            // Fallback: look for a time pattern in container text
+            const parsedTime = parseTimeOnly(
+              messageContainer.textContent || "",
+            );
+            if (parsedTime) return parsedTime;
+            return null;
+          }
+
+          const timeText =
+            timeElement.getAttribute("data-pre-plain-text") ||
+            timeElement.textContent;
+
+          // Parse WhatsApp format: [1:16 PM, 1/30/2026] +20 10 91920189:
+          const whatsappFormatMatch = timeText.match(/\[([^\]]+)\]/);
+          if (whatsappFormatMatch) {
+            const bracketContent = whatsappFormatMatch[1]; // "1:16 PM, 1/30/2026"
+            const parsedTime = new Date(bracketContent).getTime();
+            if (!isNaN(parsedTime) && parsedTime > 0) {
+              return parsedTime;
+            }
+          }
+
+          // Check for relative time indicators (old messages)
+          if (relativeTimePatterns.test(timeText)) {
+            return 0; // Mark as very old
+          }
+
+          // Try to parse full date/time
+          const parsedTime = new Date(timeText).getTime();
+          if (!isNaN(parsedTime) && parsedTime > 0) {
+            return parsedTime;
+          }
+
+          // If it's just a time like "1:16 PM", assume it's from today
+          const parsedTimeOnly = parseTimeOnly(timeText.trim());
+          if (parsedTimeOnly) return parsedTimeOnly;
+
+          return null;
+        };
+
+        const processNode = (node) => {
+          if (node.nodeType !== Node.ELEMENT_NODE) {
+            return;
+          }
+
+          const messageContainer = findMessageContainer(node);
+          if (!messageContainer) {
+            return;
+          }
+
+          const text = messageContainer.textContent?.trim() || "";
+          if (text.length <= minLength) {
+            return;
+          }
+
+          if (isOutgoing(messageContainer)) {
+            return;
+          }
+
+          const timeElement = messageContainer
+            ? metaSelectors
+                .map((selector) => messageContainer.querySelector(selector))
+                .find((el) => el)
+            : null;
+          const timeText = timeElement
+            ? timeElement.getAttribute("data-pre-plain-text") ||
+              timeElement.textContent
+            : null;
+          const timestamp = extractTimestamp(messageContainer);
+          const messageKey = extractMessageKey(
+            node,
+            messageContainer,
+            timeText,
+            text,
+          );
+
+          const dedupeKey = messageKey
+            ? `${messageKey}|${timestamp ?? ""}|${text}`
+            : `${text}|${timestamp ?? ""}`;
+          if (window.__seenMessageKeys.has(dedupeKey)) {
+            return;
+          }
+          window.__seenMessageKeys.add(dedupeKey);
+          window.__messageQueue.push({
+            text: text,
+            timestamp: timestamp,
+            messageKey: messageKey,
+          });
+        };
+
+        const observer = new MutationObserver((mutations) => {
+          mutations.forEach((mutation) => {
+            if (
+              mutation.type === "childList" &&
+              mutation.addedNodes.length > 0
+            ) {
+              mutation.addedNodes.forEach(processNode);
+            }
+          });
+        });
+
+        observer.observe(document.body, {
+          childList: true,
+          subtree: true,
+        });
+      },
+      minLength,
+      messageMetaSelectors,
+      containerSelectors,
+    );
 
     logger.info("Observer injected successfully");
   }
@@ -172,7 +329,6 @@ class MessageWatcher {
         logger.debug(`Polling error: ${error.message}`);
       }
     }, config.detection.observer.debounceMs);
-
     return pollInterval;
   }
 
@@ -186,13 +342,10 @@ class MessageWatcher {
       const messages = await this.page.evaluate(() => {
         const result = window.__messageQueue || [];
         window.__messageQueue = []; // Clear queue
-        console.log("[WATCHER] Retrieved messages from queue:", result.length);
         return result;
       });
 
       if (messages.length > 0) {
-        logger.info(`Processing ${messages.length} new messages from queue`);
-
         // Process each message from the queue
         for (const msg of messages) {
           logger.debug(`Message text: "${msg.text}"`);
@@ -210,15 +363,20 @@ class MessageWatcher {
    */
   async handleMessage(message) {
     try {
-      const { text } = message;
+      const { text, timestamp, messageKey } = message;
       if (!text) return;
 
-      logger.debug(`Processing: "${text.substring(0, 30)}..."`);
+      logger.debug(
+        `Processing message: "${text.substring(0, 30)}..." (timestamp: ${timestamp ? new Date(timestamp).toISOString() : "null"})`,
+      );
 
-      if (this._isDuplicate(text)) {
-        logger.debug("Duplicate detected, skipping");
+      // Check if message is old based on timestamp
+      if (!this._isRecentMessage(timestamp)) {
+        logger.debug("Skipped old message");
         return;
       }
+
+      if (this._isDuplicate(text, timestamp, messageKey)) return;
 
       const matchedKeyword = this._findMatchedKeyword(text);
       if (!matchedKeyword) {
@@ -230,9 +388,7 @@ class MessageWatcher {
         `✅ KEYWORD DETECTED: "${matchedKeyword}" in: "${text.substring(0, 50)}..."`,
       );
 
-      if (await this._shouldFilterByChat()) {
-        return;
-      }
+      if (await this._shouldFilterByChat()) return;
 
       this._triggerAlarm({
         keyword: matchedKeyword,
@@ -246,35 +402,103 @@ class MessageWatcher {
   }
 
   /**
-   * Check if message is a duplicate
+   * Check if message was sent after system startup
    */
-  _isDuplicate(text) {
-    if (!config.detection.enableDuplicateProtection) return false;
-
-    const hash = hashText(text);
+  _isRecentMessage(timestamp) {
     const now = Date.now();
+    const startupTimeISO = new Date(this.startupTime).toISOString();
+    const timestampISO = timestamp ? new Date(timestamp).toISOString() : "null";
+    const startupFloor = new Date(this.startupTime);
+    startupFloor.setSeconds(0, 0);
+    const startupFloorTime = startupFloor.getTime();
 
-    if (this.detectedHashes.has(hash)) {
-      const lastDetected = this.detectedHashes.get(hash);
-      if (now - lastDetected < config.detection.duplicateCacheTTL) {
-        return true;
-      }
+    logger.debug(
+      `Timestamp check - message: ${timestampISO}, startup: ${startupTimeISO}`,
+    );
+
+    // If timestamp is 0, it's marked as old (e.g., "Yesterday")
+    if (timestamp === 0) {
+      logger.debug("Marked as old (timestamp=0)");
+      return false;
     }
 
-    this.detectedHashes.set(hash, now);
+    // If no valid timestamp, reject the message (can't verify it's new)
+    if (!timestamp || timestamp === null) {
+      logger.debug("No valid timestamp - rejecting");
+      return false;
+    }
+
+    // Reject messages from the future (clock skew or parse issues)
+    if (timestamp > now) {
+      const aheadSeconds = Math.floor((timestamp - now) / 1000);
+      logger.debug(`Future timestamp (${aheadSeconds}s ahead) - rejecting`);
+      return false;
+    }
+
+    // Accept messages sent AFTER system startup
+    if (timestamp >= startupFloorTime) {
+      const ageSeconds = Math.floor((now - timestamp) / 1000);
+      logger.debug(`New message (${ageSeconds}s ago) - accepting`);
+      return true;
+    }
+
+    const ageSeconds = Math.floor((now - timestamp) / 1000);
+    logger.debug(`Old message (${ageSeconds}s ago) - rejecting`);
+    return false;
+  }
+
+  /**
+   * Check if message is a duplicate
+   */
+  _isDuplicate(text, timestamp, messageKey) {
+    if (!config.detection.enableDuplicateProtection) return false;
+
+    const now = Date.now();
+
+    const fallbackFingerprint = `${text}|${timestamp ?? ""}`;
+    const fallbackHash = hashText(fallbackFingerprint);
+    if (this._isHashRecent(fallbackHash, now)) {
+      logger.debug("Duplicate detected, skipping");
+      return true;
+    }
+
+    if (messageKey) {
+      const keyFingerprint = `${messageKey}|${timestamp ?? ""}|${text}`;
+      const keyHash = hashText(keyFingerprint);
+      if (this._isHashRecent(keyHash, now)) {
+        logger.debug("Duplicate detected, skipping");
+        return true;
+      }
+      this.detectedHashes.set(keyHash, now);
+    }
+
+    this.detectedHashes.set(fallbackHash, now);
+
     this._cleanupOldHashes();
     return false;
+  }
+
+  /**
+   * Check if hash was recently detected
+   */
+  _isHashRecent(hash, currentTime) {
+    if (!this.detectedHashes.has(hash)) return false;
+
+    const lastDetected = this.detectedHashes.get(hash);
+    return currentTime - lastDetected < config.detection.duplicateCacheTTL;
   }
 
   /**
    * Clean up old hash entries to prevent memory leak
    */
   _cleanupOldHashes() {
-    if (this.detectedHashes.size <= 1000) return;
+    if (this.detectedHashes.size <= MAX_HASH_CACHE_SIZE) return;
 
     const now = Date.now();
+    const ttl = config.detection.duplicateCacheTTL;
+
     for (const [hash, timestamp] of this.detectedHashes) {
-      if (now - timestamp > config.detection.duplicateCacheTTL) {
+      if (now - timestamp > ttl) {
         this.detectedHashes.delete(hash);
       }
     }
@@ -286,6 +510,7 @@ class MessageWatcher {
   _triggerAlarm(messageData) {
     logger.debug("Triggering alarm callback...");
     if (this.onMessageDetected) {
+      this.startupTime = Date.now();
       this.onMessageDetected(messageData);
       logger.debug("Alarm triggered successfully");
     } else {
@@ -340,14 +565,8 @@ class MessageWatcher {
    */
   async _getCurrentChatName() {
     try {
-      return await this.page.evaluate(() => {
-        const headerSelectors = [
-          '[data-testid="conversation-info-header-chat-title"]',
-          'header [dir="auto"]',
-          "header span[title]",
-        ];
-
-        for (const selector of headerSelectors) {
+      return await this.page.evaluate((selectors) => {
+        for (const selector of selectors) {
           const element = document.querySelector(selector);
           if (element) {
             return (
@@ -359,7 +578,7 @@ class MessageWatcher {
         }
 
         return "Unknown";
-      });
+      }, CHAT_HEADER_SELECTORS);
     } catch (error) {
       logger.debug(`Get chat name error: ${error.message}`);
       return "Unknown";
@@ -389,6 +608,21 @@ class MessageWatcher {
   async cleanup() {
     this.observerActive = false;
     this.detectedHashes.clear();
+  }
+
+  /**
+   * Reset in-page dedupe state after alarm stop
+   */
+  async resetAfterAlarmStop() {
+    if (!this.page) return;
+
+    try {
+      await this.page.evaluate(() => {
+        window.__messageQueue = [];
+      });
+    } catch (error) {
+      logger.debug(`Reset after alarm stop failed: ${error.message}`);
+    }
   }
 }
 
